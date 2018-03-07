@@ -135,14 +135,21 @@ public class ClusteredEventBus extends EventBusImpl {
     clusterManager.<String, ClusterNodeInfo>getAsyncMultiMap(SUBS_MAP_NAME, ar2 -> {
       if (ar2.succeeded()) {
         subs = ar2.result();
+        // ClusteredEventBus 在启动的时候，会创建一个 NetServer，用于接收 eventBus.send() 发的集群的消息
+        // eventBus.send() 发送消息后，会从集群中 hazelcast 中获取目标机器的结点信息，然后创建一个 NetClient，把消息
+        // 发送到该 NetServer 上
         server = vertx.createNetServer(getServerOptions());
 
+        // getServerHandler()，这里就是消息处理器
         server.connectHandler(getServerHandler());
         server.listen(asyncResult -> {
           if (asyncResult.succeeded()) {
+            // ClusteredEventBus 启动的时候，会获取当前机器的 host port
             int serverPort = getClusterPublicPort(options, server.actualPort());
             String serverHost = getClusterPublicHost(options);
+            // 把获取到的 host port，封装成 ServerID
             serverID = new ServerID(serverPort, serverHost);
+            // 创建 nodeInfo
             nodeInfo = new ClusterNodeInfo(clusterManager.getNodeID(), serverID);
             haManager.addDataToAHAInfo(SERVER_ID_HA_KEY, new JsonObject().put("host", serverID.host).put("port", serverID.port));
             if (resultHandler != null) {
@@ -192,6 +199,15 @@ public class ClusteredEventBus extends EventBusImpl {
 
   }
 
+  /**
+   * 重写了 EventBusImpl 中的方法，用于在集群模式下的消息体（MessageImpl）创建。
+   * @param send  标志位
+   * @param address 目标地址
+   * @param headers 设置的 headers
+   * @param body  发送的对象
+   * @param codecName 消息编码解码器
+   * @return
+   */
   @Override
   protected MessageImpl createMessage(boolean send, String address, MultiMap headers, Object body, String codecName) {
     Objects.requireNonNull(address, "no null address accepted");
@@ -201,12 +217,26 @@ public class ClusteredEventBus extends EventBusImpl {
     return msg;
   }
 
+  /**
+   * 重写 EventBusImpl 中的 addRegistration 方法
+   *
+   *
+   */
   @Override
   protected <T> void addRegistration(boolean newAddress, String address,
                                      boolean replyHandler, boolean localOnly,
                                      Handler<AsyncResult<Void>> completionHandler) {
+
+    // 判断
+    // newAddress = true 代表对应的地址之前在本地中没有注册过，是刚注册的
+    // subs != null
+    // replyHandler 不是EventBus自动生成的
+    // !localOnly 表示允许在集群范围内传播
     if (newAddress && subs != null && !replyHandler && !localOnly) {
       // Propagate the information
+      // 将当前机器的位置添加到集群内的记录 subs 中
+      // subs 是一个 AsyncMultiMap，key = address， value 是此 address 的机器位置的集合，因为 AsyncMultiMap 是一个 一键多值的 map，
+      // 所以可以是一个 address 对应多个 nodeInfo（机器位置信息）
       subs.add(address, nodeInfo, completionHandler);
       ownSubs.add(address);
     } else {
@@ -214,11 +244,16 @@ public class ClusteredEventBus extends EventBusImpl {
     }
   }
 
+  /**
+   * 重写 EventBusImpl 中的 removeRegistration 用于注销在集群模式下的注册信息
+   */
   @Override
   protected <T> void removeRegistration(HandlerHolder lastHolder, String address,
                                         Handler<AsyncResult<Void>> completionHandler) {
     if (lastHolder != null && subs != null && !lastHolder.isLocalOnly()) {
+      // ownSubs 中删除 address
       ownSubs.remove(address);
+      // 调用 removeSub
       removeSub(address, nodeInfo, completionHandler);
     } else {
       callCompletionHandlerAsync(completionHandler);
@@ -230,18 +265,31 @@ public class ClusteredEventBus extends EventBusImpl {
     clusteredSendReply(((ClusteredMessage) replierMessage).getSender(), sendContext);
   }
 
+  /**
+   * 集群模式下，会重写 EventBusImpl 中的 sendOrPub 方法，执行自己的消息分发逻辑
+   */
   @Override
   protected <T> void sendOrPub(SendContextImpl<T> sendContext) {
+    // 从传入的 sendContext.message 中获取地址
     String address = sendContext.message.address();
+
+    // 创建一个 handler，该handler 用于在 subs.get(address, handler) 时候使用
+    // subs.get(address, handler) 会从 subs 中通过 address 查看，返回一个 AsyncResult<ChoosableIterable<ClusterNodeInfo>>> 结果
+    // 然后通过 handler 处理
     Handler<AsyncResult<ChoosableIterable<ClusterNodeInfo>>> resultHandler = asyncResult -> {
+      // 这里是 handler 处理
       if (asyncResult.succeeded()) {
+        // 如果获取结果成功，把结果记录在 serverIDs 临时变量中
         ChoosableIterable<ClusterNodeInfo> serverIDs = asyncResult.result();
+        // 判断 serverIDs 是否为空
         if (serverIDs != null && !serverIDs.isEmpty()) {
+          // 如果不为空，则发送到远程服务器上
           sendToSubs(serverIDs, sendContext);
         } else {
           if (metrics != null) {
             metrics.messageSent(address, !sendContext.message.isSend(), true, false);
           }
+          // 否则就在本地分发
           deliverMessageLocally(sendContext);
         }
       } else {
@@ -329,6 +377,8 @@ public class ClusteredEventBus extends EventBusImpl {
               // Just send back pong directly on connection
               socket.write(PONG);
             } else {
+              // 通过 NetServer 获取到消息体后，还是通过本地的 deliverMessageLocally() 方法把
+              // 消息体发送到本地的 handler 上处理。
               deliverMessageLocally(received);
             }
           }
@@ -339,24 +389,32 @@ public class ClusteredEventBus extends EventBusImpl {
     };
   }
 
+  /**
+   * 这里是 集群模式下 EventBus.send() 发送消息方法
+   * 这里分了 send publish 的不同逻辑
+   */
   private <T> void sendToSubs(ChoosableIterable<ClusterNodeInfo> subs, SendContextImpl<T> sendContext) {
     String address = sendContext.message.address();
-    if (sendContext.message.isSend()) {
+    if (sendContext.message.isSend()) {   // 如果是 点对点
       // Choose one
       ClusterNodeInfo ci = subs.choose();
       ServerID sid = ci == null ? null : ci.serverID;
       if (sid != null && !sid.equals(serverID)) {  //We don't send to this node
+        // 如果 ServerID 不为空，并且不是本机的 ServerID
         if (metrics != null) {
           metrics.messageSent(address, false, false, true);
         }
+        // 调用 sendRemote 方法，进行
         sendRemote(sid, sendContext.message);
       } else {
+        // 如果 ServerID 不为空，并且是本机的 ServerID
+        // 则调用 deliverMessageLocally
         if (metrics != null) {
           metrics.messageSent(address, false, true, false);
         }
         deliverMessageLocally(sendContext);
       }
-    } else {
+    } else {    // 如果不是点对点，则用publish
       // Publish
       boolean local = false;
       boolean remote = false;
@@ -393,6 +451,7 @@ public class ClusteredEventBus extends EventBusImpl {
     }
   }
 
+  // 集群模式下，发送消息到远程服务器结点上
   private void sendRemote(ServerID theServerID, MessageImpl message) {
     // We need to deal with the fact that connecting can take some time and is async, and we cannot
     // block to wait for it. So we add any sends to a pending list if not connected yet.
@@ -415,6 +474,9 @@ public class ClusteredEventBus extends EventBusImpl {
     holder.writeMessage((ClusteredMessage) message);
   }
 
+  /**
+   * 把成员变量 subs 中删除指定的 key + node 的值
+   */
   private void removeSub(String subName, ClusterNodeInfo node, Handler<AsyncResult<Void>> completionHandler) {
     subs.remove(subName, node, ar -> {
       if (!ar.succeeded()) {

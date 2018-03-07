@@ -47,6 +47,7 @@ public class ClusteredMessage<U, V> extends MessageImpl<U, V> {
   public ClusteredMessage(ServerID sender, String address, String replyAddress, MultiMap headers, U sentBody,
                           MessageCodec<U, V> messageCodec, boolean send, EventBusImpl bus) {
     super(address, replyAddress, headers, sentBody, messageCodec, send, bus);
+    // sender 记录了本机在集群中的 host port，是一个 ServerID 对象
     this.sender = sender;
   }
 

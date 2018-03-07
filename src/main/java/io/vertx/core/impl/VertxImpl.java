@@ -215,7 +215,8 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
 
   /**
    * 私有方法
-   * 创建并启动 EventBus
+   * 创建并启动 EventBus（启动：实际上就是标记 EventBus 实现类（EventBusImpl、ClusteredEventBus）的成员变量 started = true），
+   * 其中 ClusteredEventBus 的启动过程会相对复杂一点（会有在集群中的共享 Map 中注册自己的一些信息），具体看 ClusteredEventBus 的 start 方法
    */
   private void createAndStartEventBus(VertxOptions options, Handler<AsyncResult<Vertx>> resultHandler) {
     if (options.isClustered()) {
@@ -225,6 +226,8 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
       // 否则创建普通的 EventBus （Local模式）
       eventBus = new EventBusImpl(this);
     }
+
+    // 启动 EventBus（跟进查看下 EventBus 的 start() 方法）
     eventBus.start(ar -> {
       if (ar.succeeded()) {
         if (metrics != null) {

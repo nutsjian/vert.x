@@ -146,6 +146,11 @@ public class MessageProducerImpl<T> implements MessageProducer<T> {
     super.finalize();
   }
 
+  /**
+   * 通过MessageProducerImpl 发送消息，实际是调用的 doSend 方法
+   *
+   * doSend() 方法中增加了 flow control 的相关逻辑
+   */
   private synchronized <R> void doSend(T data, Handler<AsyncResult<Message<R>>> replyHandler) {
     if (credits > 0) {
       credits--;

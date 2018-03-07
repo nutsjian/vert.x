@@ -70,6 +70,7 @@ public class HandlerRegistration<T> implements MessageConsumer<T>, Handler<Messa
     this.repliedAddress = repliedAddress;
     this.localOnly = localOnly;
     this.asyncResultHandler = asyncResultHandler;
+    // TODO 待分析 EventBus Local 源码分析
     if (timeout != -1) {
       timeoutID = vertx.setTimer(timeout, tid -> {
         if (metrics != null) {
@@ -127,7 +128,9 @@ public class HandlerRegistration<T> implements MessageConsumer<T>, Handler<Messa
     asyncResultHandler.handle(Future.failedFuture(new ReplyException(failure, msg)));
   }
 
+  // 取消消息处理函数的注册
   private void doUnregister(Handler<AsyncResult<Void>> completionHandler) {
+    // 取消定时器
     if (timeoutID != -1) {
       vertx.cancelTimer(timeoutID);
     }
@@ -174,36 +177,63 @@ public class HandlerRegistration<T> implements MessageConsumer<T>, Handler<Messa
     }
   }
 
+  /**
+   * 处理消息的函数
+   *
+   * HandlerRegistration 实现了 MessageConsumer，而 MessageConsumer 接口又继承 ReadStream 接口，这就需要实现 flow control（back-pressure）的相关逻辑。
+   * 如何实现呢？
+   *    HandlerRegistration 中有一个 paused 标志位代表是否还继续处理消息。ReadStream 接口中定义了两个函数用于控制 stream 的通断。
+   *    当处理速度 小于 读取速度（发生拥塞）的时候，我们可以通过 pause() 方法暂停消息的传递，将积压的消息暂存于内部的消息队列（缓冲区） pendding 中，
+   *    当相对速度正常的时候，我们可以通过 resume() 方法恢复消息的传递和处理。
+   */
   @Override
   public void handle(Message<T> message) {
     Handler<Message<T>> theHandler;
+    // 为了防止资源挣用，加上 synchronized 加锁
     synchronized (this) {
-      if (paused) {
+      // 首先判断当前的 consumer 是否为 paused 状态
+      if (paused) { // 暂停状态
+        // 如果 paused = true，再检查当前缓冲区大小是否已经超过给定的最大缓冲区大小？
         if (pending.size() < maxBufferedMessages) {
+          // 没有超过，将收到的消息加入到缓冲区
           pending.add(message);
         } else {
+          // 如果大于或等于这个阈值 并且 存在 discardHandler，Vert.x 就需要丢弃超出的那部分消息（通过 discardHandler 处理器）
           if (discardHandler != null) {
             discardHandler.handle(message);
           } else {
+            // 如果大于或等于这个阈值，但是不存在 discardHandler，则打印警告信息
             log.warn("Discarding message as more than " + maxBufferedMessages + " buffered in paused consumer. address: " + address);
           }
         }
+        // 直接退出，不处理消息（当前是暂停状态）
         return;
       } else {
+        // 当前 consumer 为正常状态
         if (pending.size() > 0) {
+          // 缓冲区不为空，将收到的消息 push 到缓冲区中
+          // 并且从缓冲区中 poll 队列首端的消息
           pending.add(message);
           message = pending.poll();
         }
         theHandler = handler;
       }
     }
+    // 最后调用 deliver 处理消息
+    // 注意这里是锁之外处理的消息，这是为了保证 multithreaded worker context 下可以并发传递消息
+    // 由于 multithreaded worker context 允许在不同线程中并发执行逻辑，如果把 deliver 方法置于 synchronized 块之内
+    // 其它线程必须等待当前锁被释放才能进行消息的传递逻辑，因而不能做到 delivery concurrently
+    // bug https://bugs.eclipse.org/bugs/show_bug.cgi?id=473714
     deliver(theHandler, message);
   }
 
   private void deliver(Handler<Message<T>> theHandler, Message<T> message) {
     // Handle the message outside the sync block
     // https://bugs.eclipse.org/bugs/show_bug.cgi?id=473714
+    // 首先 vert.x 会调用 checkNextTick 方法来检查消息队列（缓冲区）中是否存在更多的消息等待被处理。
     checkNextTick();
+
+    // 检查消息是否是 ClusteredMessage，并标记 local
     boolean local = true;
     if (message instanceof ClusteredMessage) {
       // A bit hacky
@@ -212,15 +242,24 @@ public class HandlerRegistration<T> implements MessageConsumer<T>, Handler<Messa
         local = false;
       }
     }
+
+    // 这个 creditsAddress 是什么？
+    // 答案：MessageProducer 接口对应某个 address 上的消息生产者，同时它继承了 WriteStream 接口，因此
+    // MessageProducer 的实现类 MessageProducerImpl 同样具有 flow control 的能力。我们可以把 MessageProducer 看成
+    // 是一个具有 flow control 功能的增强版 EventBus。我们可以通过 EventBus 接口的publisher 方法创建一个 MessageProducer
     String creditsAddress = message.headers().get(MessageProducerImpl.CREDIT_ADDRESS_HEADER_NAME);
     if (creditsAddress != null) {
       eventBus.send(creditsAddress, 1);
     }
     try {
+      // 处理消息前，记录 metric 数据
       if (metrics != null) {
         metrics.beginHandleMessage(metric, local);
       }
+      // 处理消息
       theHandler.handle(message);
+
+      // 处理消息后，记录 metric 数据
       if (metrics != null) {
         metrics.endHandleMessage(metric, null);
       }
@@ -257,13 +296,25 @@ public class HandlerRegistration<T> implements MessageConsumer<T>, Handler<Messa
     this.discardHandler = handler;
   }
 
+  /**
+   * 绑定消息处理函数
+   *
+   * 一个 MessageConsumer 对应一个消息处理函数。
+   * @param handler 消息处理函数
+   */
   @Override
   public synchronized MessageConsumer<T> handler(Handler<Message<T>> handler) {
+    // 设置为成员变量
     this.handler = handler;
+    // 消息处理函数不为空 && 还没注册该函数
     if (this.handler != null && !registered) {
+      // 注册并标记
       registered = true;
+      // 调用 eventBus 的 addRegistration 把此 consumer 注册到 EventBus 上
       eventBus.addRegistration(address, this, repliedAddress != null, localOnly);
     } else if (this.handler == null && registered) {
+      // 消息处理函数为空 && 已经注册
+      // 则调用 unregister 取消注册
       // This will set registered to false
       this.unregister();
     }

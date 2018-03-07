@@ -23,6 +23,7 @@ public class ClusterNodeInfo implements Serializable {
   private static final long serialVersionUID = 1L;
 
   public String nodeId;
+  // 机器的位置信息对象，里面包含 host port
   public ServerID serverID;
 
   public ClusterNodeInfo() {

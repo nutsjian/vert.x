@@ -44,13 +44,13 @@ public class MessageImpl<U, V> implements Message<V> {
   public MessageImpl(String address, String replyAddress, MultiMap headers, U sentBody,
                      MessageCodec<U, V> messageCodec,
                      boolean send, EventBusImpl bus) {
-    this.messageCodec = messageCodec;
-    this.address = address;
-    this.replyAddress = replyAddress;
-    this.headers = headers;
-    this.sentBody = sentBody;
-    this.send = send;
-    this.bus = bus;
+    this.messageCodec = messageCodec;   // codec
+    this.address = address;             // 发送目标地址
+    this.replyAddress = replyAddress;   // 回复地址
+    this.headers = headers;             // header
+    this.sentBody = sentBody;           // 发送的对象
+    this.send = send;                   // 是否为 点对点 模式（所以，publish、send，在构造 MessageImpl的时候传入的参数不一致），send = true，代表是 点对点
+    this.bus = bus;                     // 相关的 EventBus 实例
   }
 
   protected MessageImpl(MessageImpl<U, V> other) {
