@@ -200,6 +200,8 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
           synchronized (VertxImpl.this) {
             haManager = new HAManager(this, deploymentManager, clusterManager, options.getQuorumSize(),
                                       options.getHAGroup(), haEnabled);
+
+            // 创建 EventBus 并启动
             createAndStartEventBus(options, resultHandler);
           }
         }
@@ -211,10 +213,16 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     this.sharedData = new SharedDataImpl(this, clusterManager);
   }
 
+  /**
+   * 私有方法
+   * 创建并启动 EventBus
+   */
   private void createAndStartEventBus(VertxOptions options, Handler<AsyncResult<Vertx>> resultHandler) {
     if (options.isClustered()) {
+      // 如果是集群方式，则创建集群模式的 EventBus （Clusted模式）
       eventBus = new ClusteredEventBus(this, options, clusterManager, haManager);
     } else {
+      // 否则创建普通的 EventBus （Local模式）
       eventBus = new EventBusImpl(this);
     }
     eventBus.start(ar -> {
@@ -303,10 +311,17 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     return createHttpClient(new HttpClientOptions());
   }
 
+  /**
+   * 该方法返回 VertxImpl 的成员变量 eventBus
+   * @return eventBus
+   */
   public EventBus eventBus() {
     if (eventBus == null) {
       // If reading from different thread possibility that it's been set but not visible - so provide
       // memory barrier
+      // synchronized 是为了保证 eventBus 的可见性
+      // 那么 eventBus 成员变量的初始化在哪里呢？
+      // 答案是在 VertxImpl 的构造函数中
       synchronized (this) {
         return eventBus;
       }
