@@ -171,6 +171,8 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
 
     metrics = initialiseMetrics(options);
 
+    // 这里是初始化 Worker 线程池
+    // 可以看到，本质上是一个 newFixedThreadPool，里面的线程由 VertxThreadFactory 控制生成，对应的线程类型是 VertxThread
     ExecutorService workerExec = Executors.newFixedThreadPool(options.getWorkerPoolSize(),
         new VertxThreadFactory("vert.x-worker-thread-", checker, true, options.getMaxWorkerExecuteTime()));
     PoolMetrics workerPoolMetrics = metrics != null ? metrics.createMetrics(workerExec, "worker", "vert.x-worker-thread", options.getWorkerPoolSize()) : null;
@@ -179,6 +181,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     PoolMetrics internalBlockingPoolMetrics = metrics != null ? metrics.createMetrics(internalBlockingExec, "worker", "vert.x-internal-blocking", options.getInternalBlockingPoolSize()) : null;
     internalBlockingPool = new WorkerPool(internalBlockingExec, internalBlockingPoolMetrics);
     namedWorkerPools = new HashMap<>();
+    // 用 WorkerPool 对 Worker线程池 + Worker线程池相关的Metrics 进行了包装
     workerPool = new WorkerPool(workerExec, workerPoolMetrics);
     defaultWorkerPoolSize = options.getWorkerPoolSize();
     defaultWorkerMaxExecTime = options.getMaxWorkerExecuteTime();
@@ -733,6 +736,8 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
   @Override
   public <T> void executeBlocking(Handler<Future<T>> blockingCodeHandler, boolean ordered,
                                   Handler<AsyncResult<T>> asyncResultHandler) {
+    // 通过调用 getOrCreateContext() 来使用/新创建一个 Context
+    // 等下在分析 Context 是如何创建并绑定到 VertxThread 上的？ TODO
     ContextImpl context = getOrCreateContext();
     context.executeBlocking(blockingCodeHandler, ordered, asyncResultHandler);
   }
@@ -740,6 +745,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
   @Override
   public <T> void executeBlocking(Handler<Future<T>> blockingCodeHandler,
                                   Handler<AsyncResult<T>> asyncResultHandler) {
+    // 注意这里的 ordered = true，也就是默认 executeBlocking 是顺序执行的
     executeBlocking(blockingCodeHandler, true, asyncResultHandler);
   }
 

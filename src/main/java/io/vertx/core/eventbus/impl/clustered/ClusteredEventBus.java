@@ -357,22 +357,31 @@ public class ClusteredEventBus extends EventBusImpl {
 
   private Handler<NetSocket> getServerHandler() {
     return socket -> {
+      // 这里为什么要 newFixed(4) ？
+      // 答案可以参考 ClusteredMessage.encodeToWire()方法，后面的代码有 setBytes(0, buffer.length-4) 类似这样的代码，实际上是在设置 body 的长度
+      // wire protocol 规定第一个 int 值为要发送的 Buffer 的长度，而一个 int = 4 个字节
       RecordParser parser = RecordParser.newFixed(4);
       Handler<Buffer> handler = new Handler<Buffer>() {
         int size = -1;
 
         public void handle(Buffer buff) {
+          // 首先通过 getInt(0)，得到 body 的长度记录为 size
+          // 并修正 parser
           if (size == -1) {
             size = buff.getInt(0);
             parser.fixedSizeMode(size);
           } else {
+            // 通过 readFromWire 把 buffer 转换成 ClusteredMessage
             ClusteredMessage received = new ClusteredMessage();
             received.readFromWire(buff, codecManager);
             if (metrics != null) {
               metrics.messageRead(received.address(), buff.length());
             }
+            // 然后再次修正，准备下一个流的读取
             parser.fixedSizeMode(4);
+            // 设置 size = -1，可以让parser 下次继续先读取下一个流的 body 长度，然后继续转换 buffer -> ClusteredMessage 来处理，如此反复
             size = -1;
+            // 如果接受到的消息的 codec 是 PING_MESSAGE_CODEC，则直接回复 PONG 消息
             if (received.codec() == CodecManager.PING_MESSAGE_CODEC) {
               // Just send back pong directly on connection
               socket.write(PONG);
@@ -384,7 +393,10 @@ public class ClusteredEventBus extends EventBusImpl {
           }
         }
       };
+      // 设置 parser 的output 处理器
       parser.setOutput(handler);
+      // 设置 socket 的处理器 Handler，因为 parser 继承 Handler接口，又实现了 handle 方法，所以这里
+      // 直接设置 parser 处理器，而 parser 实现的 handle 方法就是上面的那一串逻辑
       socket.handler(parser);
     };
   }
@@ -462,15 +474,25 @@ public class ClusteredEventBus extends EventBusImpl {
     if (holder == null) {
       // When process is creating a lot of connections this can take some time
       // so increase the timeout
+      // 创建一个 ConnectionHolder 内部实例化一个 NetClientImpl 的实例，并用 ConnectionHolder 封装
       holder = new ConnectionHolder(this, theServerID, options);
+      // 把 ConnectionHolder 放入 connections 中
+      // connections 是一个ConcurrentMap<ServerID, ConnectionHolder>
+      // 可以观察下 ServerID 的 equals() 和 hashCode() 方法
+      // putIfAbsent() 方法：不存在就把 value 放进去，并返回。存在就直接返回之前的（prev） = retrun map.get(key)
       ConnectionHolder prevHolder = connections.putIfAbsent(theServerID, holder);
       if (prevHolder != null) {
+        // 如果 prevHolder != null，代表之前存在该 key，则直接返回该 value
         // Another one sneaked in
         holder = prevHolder;
       } else {
+        // 否则把新创建的 ConnectionHolder 通过 connect() 方法建立连接
+        // 并且检查了 pending 中的消息，遍历并发送出去
         holder.connect();
       }
     }
+    // 上面的 holder.connect() 是一个同步方法
+    // 这里调用 writeMessage 发送消息的时候可能客户端连接还没建立好，因此需要有一个缓冲区存放消息，等到建立好连接后再从缓冲区中遍历消息（之前放入的消息）发出去
     holder.writeMessage((ClusteredMessage) message);
   }
 

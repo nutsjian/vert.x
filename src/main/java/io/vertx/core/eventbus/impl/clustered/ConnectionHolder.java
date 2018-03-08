@@ -63,8 +63,11 @@ class ConnectionHolder {
     if (connected) {
       throw new IllegalStateException("Already connected");
     }
+    // 这个 client 就是在 new ConnectionHolder 的构造器中创建的 NetClientImpl 实例
+    // serverID 是发送目的服务器的结点信息对象
     client.connect(serverID.port, serverID.host, res -> {
       if (res.succeeded()) {
+        // 连接成功后调用 connected 方法
         connected(res.result());
       } else {
         log.warn("Connecting to server " + serverID + " failed", res.cause());
@@ -76,6 +79,10 @@ class ConnectionHolder {
   // TODO optimise this (contention on monitor)
   synchronized void writeMessage(ClusteredMessage message) {
     if (connected) {
+      // 这里把 ClusteredMessage 编码成 wire protocol 的 Buffer 对象（本质上是一个 Netty 的 Unpooled.buffer()，即堆内存）JVM 会检查当 GC ROOT 不可达的时候自动回收这部分内存
+      // vert.x 中的 Buffer.buffer()，底层是调用的 Unpooled.unreleasableBuffer(Unpooled.buffer(...), ...); 所以本质上是一个 堆内存（没有池化），所以 JVM 会自动回收
+      // 这里为什么要用 堆内存呢？ 因为发送消息是一次性的，每次发送的Buffer都可能不一样，所以池化没有必要，反而会让内存爆掉。
+      // 使用 Unpooled.buffer 可以在一次消息发送完成后，等待 JVM GC 后自动被回收释放内存
       Buffer data = message.encodeToWire();
       if (metrics != null) {
         metrics.messageWritten(message.address(), data.length());
@@ -131,8 +138,11 @@ class ConnectionHolder {
   private synchronized void connected(NetSocket socket) {
     this.socket = socket;
     connected = true;
+    // 给 socket 设置异常处理、关闭处理
     socket.exceptionHandler(t -> close());
     socket.closeHandler(v -> close());
+
+    // 处理消息
     socket.handler(data -> {
       // Got a pong back
       vertx.cancelTimer(timeoutID);
@@ -144,11 +154,14 @@ class ConnectionHolder {
       if (log.isDebugEnabled()) {
         log.debug("Draining the queue for server " + serverID);
       }
+      // 如果建立连接后发现缓冲区中有消息，则遍历并尝试发送消息
       for (ClusteredMessage message : pending) {
+        // 把 ClusteredMessage 编码成 wire 协议体
         Buffer data = message.encodeToWire();
         if (metrics != null) {
           metrics.messageWritten(message.address(), data.length());
         }
+        // 发送数据
         socket.write(data);
       }
     }

@@ -24,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
+ *
+ * EventLoopGroup 中 EventLoop 的数量由 CPU 内核数目所确定。
  */
 @SuppressWarnings("deprecation")
 public final class VertxEventLoopGroup extends AbstractEventExecutorGroup implements EventLoopGroup {
@@ -31,6 +33,7 @@ public final class VertxEventLoopGroup extends AbstractEventExecutorGroup implem
   private int pos;
   private final List<EventLoopHolder> workers = new ArrayList<>();
 
+  // 轮询获取 EventLoop
   @Override
   public synchronized EventLoop next() {
     if (workers.isEmpty()) {

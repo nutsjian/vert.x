@@ -133,6 +133,8 @@ public abstract class ContextImpl implements ContextInternal {
     VertxThreadFactory.unsetContext(this);
   }
 
+  // 模板方法，让子类去实现，executeAsync 在 ContextImpl 这个抽象类中
+  // runOnContext 地方会调用
   protected abstract void executeAsync(Handler<Void> task);
 
   @Override
@@ -195,9 +197,11 @@ public abstract class ContextImpl implements ContextInternal {
     wrapTask(task, null, true, null).run();
   }
 
+  // 模板方法，让子类自己去实现检查 context 是否在自己线程中
   protected abstract void checkCorrectThread();
 
   // Run the task asynchronously on this same context
+  // 保证任务的异步执行是在同一个线程中
   @Override
   public void runOnContext(Handler<Void> task) {
     try {
@@ -237,6 +241,16 @@ public abstract class ContextImpl implements ContextInternal {
     executeBlocking(action, null, resultHandler, internalBlockingPool.executor(), internalOrderedTasks, internalBlockingPool.metrics());
   }
 
+  /**
+   * 注意这里的 ordered ? orderedTasks : null，其中 orderedTasks 的类型是 TaskQueue
+   * 也就是当 ordered = true（有序执行），我们会把 orderedTasks 当参数传入
+   *
+   * @param blockingCodeHandler  handler representing the blocking code to run
+   * @param ordered  if true then if executeBlocking is called several times on the same context, the executions
+   *                 for that context will be executed serially, not in parallel. if false then they will be no ordering
+   *                 guarantees
+   * @param resultHandler  handler that will be called when the blocking code is complete
+   */
   @Override
   public <T> void executeBlocking(Handler<Future<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> resultHandler) {
     executeBlocking(null, blockingCodeHandler, resultHandler, workerPool.executor(), ordered ? orderedTasks : null, workerPool.metrics());
@@ -252,6 +266,15 @@ public abstract class ContextImpl implements ContextInternal {
     executeBlocking(null, blockingCodeHandler, resultHandler, workerPool.executor(), queue, workerPool.metrics());
   }
 
+  /**
+   *
+   * @param action todo
+   * @param blockingCodeHandler 阻塞任务
+   * @param resultHandler 结果处理器
+   * @param exec  这个参数就是要执行这个阻塞任务的 “线程池” wokerPool.executor
+   * @param queue 当 ordered = true，这里会传入 orderedTasks，否则传入 null
+   * @param metrics 统计
+   */
   <T> void executeBlocking(Action<T> action, Handler<Future<T>> blockingCodeHandler,
       Handler<AsyncResult<T>> resultHandler,
       Executor exec, TaskQueue queue, PoolMetrics metrics) {
@@ -269,9 +292,12 @@ public abstract class ContextImpl implements ContextInternal {
         Future<T> res = Future.future();
         try {
           if (blockingCodeHandler != null) {
+            // 把上下文 context 设置到当前线程中
             ContextImpl.setContext(this);
             blockingCodeHandler.handle(res);
           } else {
+            // 如果 blockingCodeHandler == null，那么不会涉及到更新本线程上下文中的内容
+            // 则不需要在当前线程中执行，直接调用 perform 方法，得到结果
             T result = action.perform();
             res.complete(result);
           }
@@ -285,10 +311,18 @@ public abstract class ContextImpl implements ContextInternal {
         if (metrics != null) {
           metrics.end(execMetric, res.succeeded());
         }
+        // 如果 resultHandler 不为空，则需要调用 runOnContext 保证在当前线程中执行
         if (resultHandler != null) {
           runOnContext(v -> res.setHandler(resultHandler));
         }
       };
+
+      // 上面包装了一个 Runnable 的 command
+      // 这里检查 queue 是否为空
+      // queue == null 代表 ordered = false
+      // queue == orderedTasks 代表 ordered = true
+      // 有序的话就调用 queue 的 execute() 执行，本质还是用 workerPool.executor 来执行，只不过保证了顺序，可以看下 queue.execute 方法
+      // 无序的话执行用 workerPool.executor() 执行
       if (queue != null) {
         queue.execute(command, exec);
       } else {

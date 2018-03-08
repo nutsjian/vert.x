@@ -29,6 +29,7 @@ class WorkerPool {
     this.metrics = metrics;
   }
 
+  // 直接返回了线程池，而这个 pool 线程池实际上就是 VertxImpl 实例化时候创建的 newFixedThreadPool
   ExecutorService executor() {
     return pool;
   }

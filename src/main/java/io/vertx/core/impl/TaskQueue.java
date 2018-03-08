@@ -59,7 +59,9 @@ public class TaskQueue {
   private void run() {
     for (; ; ) {
       final Task task;
+      // 注意 synchronized
       synchronized (tasks) {
+        // 获取一个 task
         task = tasks.poll();
         if (task == null) {
           current = null;
@@ -86,10 +88,14 @@ public class TaskQueue {
    * @param task the task to run.
    */
   public void execute(Runnable task, Executor executor) {
+    // 注意这里的 synchronized，因为 tasks 在执行的时候，有可能有新的 task 加进来了
     synchronized (tasks) {
+      // 把要执行的任务加入到 tasks 中
+      // tasks 的类型是 LinkedList<Task>
       tasks.add(new Task(task, executor));
       if (current == null) {
         current = executor;
+        // 调用execute方法，让 Runnable 对象 runner 执行，实际就是调用了 run() 方法
         executor.execute(runner);
       }
     }

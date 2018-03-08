@@ -37,6 +37,7 @@ public class BufferImpl implements Buffer {
   }
 
   BufferImpl(int initialSizeHint) {
+    // 通过 Netty 中的 Unpooled 创建了一个不可销毁（不可释放）的 Buffer，
     buffer = Unpooled.unreleasableBuffer(Unpooled.buffer(initialSizeHint, Integer.MAX_VALUE));
   }
 
