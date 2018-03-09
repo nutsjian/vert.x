@@ -120,6 +120,8 @@ public class DeploymentManager {
     }
     Verticle[] verticlesArray = verticles.toArray(new Verticle[verticles.size()]);
     String verticleClass = verticlesArray[0].getClass().getName();
+    // 每次 deployVerticle 都会生成一个 UUID 作为 deploymentId
+    // 如果 depolyVerticle 设置的 instance > 1，生成的 deploymentId 也对应的是 1 个
     doDeploy("java:" + verticleClass, generateDeploymentID(), options, currentContext, currentContext, completionHandler, cl, verticlesArray);
   }
 
@@ -456,6 +458,18 @@ public class DeploymentManager {
     });
   }
 
+  /**
+   * doDeploy() ，执行了实际的 verticle 部署的逻辑
+   *
+   * @param identifier verticle 的标识符
+   * @param deploymentID  这次部署的 ID，UUID
+   * @param options 部署的选项
+   * @param parentContext 当前这次部署的 父 Context
+   * @param callingContext 当前执行这次部署所在的 Context
+   * @param completionHandler 完成后的 handler
+   * @param tccl  给 verticle 指定的线程上下文类加载器
+   * @param verticles 即将部署的 verticle 数组
+   */
   private void doDeploy(String identifier, String deploymentID, DeploymentOptions options,
                         ContextImpl parentContext,
                         ContextImpl callingContext,
@@ -464,12 +478,20 @@ public class DeploymentManager {
     JsonObject conf = options.getConfig() == null ? new JsonObject() : options.getConfig().copy(); // Copy it
     String poolName = options.getWorkerPoolName();
 
+    // 建立了 verticle 的父子关系
+    // verticle 和 context 的关系，ContextImpl 会持有一个 Deployment 的引用
     Deployment parent = parentContext.getDeployment();
     DeploymentImpl deployment = new DeploymentImpl(parent, deploymentID, identifier, options);
 
     AtomicInteger deployCount = new AtomicInteger();
     AtomicBoolean failureReported = new AtomicBoolean();
     for (Verticle verticle: verticles) {
+      // 这里通过 poolName 是否为空来创建 WorkerPool
+      // poolName 是在 DeploymentOptions 中设置的，如果设置了 poolName，则通过该 poolName 创建一个共享的 Worker 线程池
+      // 如果要使用自定义的 worker 线程池，则还需要如下属性配置：wokerPoolSize、maxWorkerExecuteTime
+      // 具体可以查看 createSharedWorkerExecutor() 方法
+
+      // 如果 poolName == null，则会使用 VertxImpl 中创建好的 workerPool，在一个 Vertx 实例中是共享的
       WorkerExecutorImpl workerExec = poolName != null ? vertx.createSharedWorkerExecutor(poolName, options.getWorkerPoolSize(), options.getMaxWorkerExecuteTime()) : null;
       WorkerPool pool = workerExec != null ? workerExec.getPool() : null;
 
@@ -520,6 +542,7 @@ public class DeploymentManager {
     }
   }
 
+  // 静态内部类，用来保存 verticle + context 之间的对应关系
   static class VerticleHolder {
     final Verticle verticle;
     final ContextImpl context;

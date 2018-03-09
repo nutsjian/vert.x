@@ -141,6 +141,7 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
   public HttpServerImpl(VertxInternal vertx, HttpServerOptions options) {
     this.options = new HttpServerOptions(options);
     this.vertx = vertx;
+    // 获取 vertx 上下文
     this.creatingContext = vertx.getContext();
     if (creatingContext != null) {
       if (creatingContext.isMultiThreadedWorkerContext()) {
@@ -227,7 +228,14 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
     return listen(port, "0.0.0.0", listenHandler);
   }
 
+  /**
+   * 开始监听
+   * @param port  the port to listen on
+   * @param host  the host to listen on
+   * @param listenHandler  the listen handler
+   */
   public synchronized HttpServer listen(int port, String host, Handler<AsyncResult<HttpServer>> listenHandler) {
+    // requestStream.handler() 如果为空，说明还没有设置 handler
     if (requestStream.handler() == null && wsStream.handler() == null) {
       throw new IllegalStateException("Set request or websocket handler first");
     }
@@ -247,8 +255,10 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
       id = new ServerID(port, host);
       HttpServerImpl shared = vertx.sharedHttpServers().get(id);
       if (shared == null || port == 0) {
+        // 这边代码很熟悉，就是 netty 中创建一个 server
         serverChannelGroup = new DefaultChannelGroup("vertx-acceptor-channels", GlobalEventExecutor.INSTANCE);
         ServerBootstrap bootstrap = new ServerBootstrap();
+        // 绑定线程组，一个负责处理连接，一个负责处理IO
         bootstrap.group(vertx.getAcceptorEventLoopGroup(), availableWorkers);
         applyConnectionOptions(bootstrap);
         sslHelper.validate(vertx);
@@ -260,6 +270,7 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
                 return;
               }
               ChannelPipeline pipeline = ch.pipeline();
+              // 如果开启了 SSL
               if (sslHelper.isSSL()) {
                 io.netty.util.concurrent.Future<Channel> handshakeFuture;
                 if (options.isSni()) {
@@ -268,6 +279,7 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
                   handshakeFuture = sniHandler.handshakeFuture();
                 } else {
                   SslHandler handler = new SslHandler(sslHelper.createEngine(vertx));
+                  // 在pipeline 中添加SSL处理器
                   pipeline.addLast("ssl", handler);
                   handshakeFuture = handler.handshakeFuture();
                 }
@@ -290,6 +302,7 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
                   }
                 });
               } else {
+                // 这里没有 开始 SSL 的逻辑代码
                 if (DISABLE_HC2) {
                   handleHttp1(ch);
                 } else {
@@ -379,6 +392,7 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
             res = Future.failedFuture(future.cause());
             listening = false;
           }
+          // 这里真正的处理 handler
           listenContext.runOnContext((v) -> listenHandler.handle(res));
         } else if (future.failed()) {
           listening  = false;

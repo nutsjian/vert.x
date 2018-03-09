@@ -304,6 +304,9 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     return new HttpServerImpl(this, serverOptions);
   }
 
+  /**
+   * 创建 HttpServer
+   */
   @Override
   public HttpServer createHttpServer() {
     return createHttpServer(new HttpServerOptions());
@@ -1059,6 +1062,12 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     return createSharedWorkerExecutor(name, poolSize, defaultWorkerMaxExecTime);
   }
 
+  /**
+   * 当 DeploymentOptions 中的 poolName 不为空，就会调用该方法创建一个共享的 worker 线程池
+   * @param name 线程池名称
+   * @param poolSize 大小
+   * @param maxExecuteTime 最大执行时间
+   */
   @Override
   public synchronized WorkerExecutorImpl createSharedWorkerExecutor(String name, int poolSize, long maxExecuteTime) {
     if (poolSize < 1) {
@@ -1067,16 +1076,25 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     if (maxExecuteTime < 1) {
       throw new IllegalArgumentException("maxExecuteTime must be > 0");
     }
+    // namedWorkerPools 是 Map<String, SharedWorkerPool> 类型数据
     SharedWorkerPool sharedWorkerPool = namedWorkerPools.get(name);
+
+    // 如果找不到该 worker 线程池
     if (sharedWorkerPool == null) {
+      // 则新建一个 worker 线程池，通过 VertxThreadFactory 来创建线程
       ExecutorService workerExec = Executors.newFixedThreadPool(poolSize, new VertxThreadFactory(name + "-", checker, true, maxExecuteTime));
       PoolMetrics workerMetrics = metrics != null ? metrics.createMetrics(workerExec, "worker", name, poolSize) : null;
+      // 放入到 namedWorkerPools 中，以便下次 deploymentOptions 中的 poolName 设置一样的时候可以复用这个线程池
       namedWorkerPools.put(name, sharedWorkerPool = new SharedWorkerPool(name, workerExec, workerMetrics));
     } else {
+      // 如果已经存在 poolName 的 worker 线程池
+      // 则直接在这个 worker 线程池上的引用 refCount 自增 1
       sharedWorkerPool.refCount++;
     }
     ContextImpl context = getOrCreateContext();
+    // 创建 WorkerExecutorImpl 实例，并返回
     WorkerExecutorImpl namedExec = new WorkerExecutorImpl(this, sharedWorkerPool, true);
+    // 把这个实例设置到 context 上下文中的 closeHook 中，以便在 context 销毁的时候，可以通过这个钩子来销毁 worker 线程池
     context.addCloseHook(namedExec);
     return namedExec;
   }
