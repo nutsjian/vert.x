@@ -78,9 +78,11 @@ public class DeploymentManager {
   }
 
   public void deployVerticle(Supplier<Verticle> verticleSupplier, DeploymentOptions options, Handler<AsyncResult<String>> completionHandler) {
+    // 实例数不能小于 1
     if (options.getInstances() < 1) {
       throw new IllegalArgumentException("Can't specify < 1 instances to deploy");
     }
+    // 如果是 multi-thread，则必须是 worker 线程
     if (options.isMultiThreaded() && !options.isWorker()) {
       throw new IllegalArgumentException("If multi-threaded then must be worker too");
     }
@@ -93,6 +95,7 @@ public class DeploymentManager {
     if (options.getIsolatedClasses() != null) {
       throw new IllegalArgumentException("Can't specify isolatedClasses for already created verticle");
     }
+    // 这里创建了一个 ContextImpl
     ContextImpl currentContext = vertx.getOrCreateContext();
     ClassLoader cl = getClassLoader(options, currentContext);
     int nbInstances = options.getInstances();
@@ -469,6 +472,9 @@ public class DeploymentManager {
     for (Verticle verticle: verticles) {
       WorkerExecutorImpl workerExec = poolName != null ? vertx.createSharedWorkerExecutor(poolName, options.getWorkerPoolSize(), options.getMaxWorkerExecuteTime()) : null;
       WorkerPool pool = workerExec != null ? workerExec.getPool() : null;
+
+      // 这里通过 options.isWorker() 来区分创建 WorkerContext 还是 EventLoopContext
+      // 这里创建 EventLoopContext的时候，在 EventLoopContext的构造函数中会让 ContextImpl 选择一个 EventLoop 与本 Context 绑定
       ContextImpl context = options.isWorker() ? vertx.createWorkerContext(options.isMultiThreaded(), deploymentID, pool, conf, tccl) :
         vertx.createEventLoopContext(deploymentID, pool, conf, tccl);
       if (workerExec != null) {
@@ -478,8 +484,10 @@ public class DeploymentManager {
       deployment.addVerticle(new VerticleHolder(verticle, context));
       context.runOnContext(v -> {
         try {
+          // 调用 verticle.init() 方法
           verticle.init(vertx, context);
           Future<Void> startFuture = Future.future();
+          // 调用 verticle.start(Future future) 方法
           verticle.start(startFuture);
           startFuture.setHandler(ar -> {
             if (ar.succeeded()) {

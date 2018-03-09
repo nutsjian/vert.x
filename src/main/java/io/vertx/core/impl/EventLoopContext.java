@@ -37,6 +37,8 @@ public class EventLoopContext extends ContextImpl {
   public void executeAsync(Handler<Void> task) {
     // No metrics, we are on the event loop.
     // 这里通过 wrapTask 方法把 handler 包装后提交给 eventLoop 执行
+    // nettyEventLoop 获取当前 Context 关联的 EventLoop，然后执行 execute 方法
+    // 那么这个 Context 关联的 EventLoop 是什么时候设置进去的呢？ TODO
     nettyEventLoop().execute(wrapTask(null, task, true, null));
   }
 

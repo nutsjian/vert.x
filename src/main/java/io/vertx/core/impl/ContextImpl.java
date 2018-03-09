@@ -60,6 +60,7 @@ public abstract class ContextImpl implements ContextInternal {
   private Deployment deployment;
   private CloseHooks closeHooks;
   private final ClassLoader tccl;
+  // 每个 Context 会对应一个 eventLoop，这个 Context 持有的EventLoop 是什么时候设置进来的呢？
   private final EventLoop eventLoop;
   protected VertxThread contextThread;
   private ConcurrentMap<Object, Object> contextData;
@@ -69,6 +70,8 @@ public abstract class ContextImpl implements ContextInternal {
   final TaskQueue orderedTasks;
   protected final TaskQueue internalOrderedTasks;
 
+
+  // 这里注意一点，getEventLoop(vertx) 从 EventLoopGroup 中选择一个 EventLoop 并设置给当前 Context（绑定）
   protected ContextImpl(VertxInternal vertx, WorkerPool internalBlockingPool, WorkerPool workerPool, String deploymentID, JsonObject config,
                         ClassLoader tccl) {
     this(vertx, getEventLoop(vertx), internalBlockingPool, workerPool, deploymentID, config, tccl);

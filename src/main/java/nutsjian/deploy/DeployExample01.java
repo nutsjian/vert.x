@@ -2,6 +2,7 @@ package nutsjian.deploy;
 
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Vertx;
+import io.vertx.core.impl.EventLoopContext;
 
 public class DeployExample01 {
 
